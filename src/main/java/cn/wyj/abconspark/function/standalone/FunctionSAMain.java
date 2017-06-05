@@ -7,8 +7,12 @@ public class FunctionSAMain {
 			{ 5, 1, 2, 3, 4 }, { -1, -2, -3, -4, -5 }, { -2, -3, -4, -5, -1 }, { -3, -4, -5, -1, -2 },
 			{ -4, -5, -1, -2, -3 }, { -5, -1, -2, -3, -4 }
 		};
-
-		FunctionSAHive hive = new FunctionSAHive(data, 10000, 100, 100, 100, 100);
+		int swarmSize = 50;
+		int maxCycle = 2000;
+		int trailLimit = 100;
+		double mistakeRate = 0.05;
+		
+		FunctionSAHive hive = new FunctionSAHive(data, swarmSize, maxCycle, trailLimit, mistakeRate);
 		hive.solve();
 		hive.show();
 	}

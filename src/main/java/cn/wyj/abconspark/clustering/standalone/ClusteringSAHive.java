@@ -10,11 +10,10 @@ public class ClusteringSAHive implements java.io.Serializable {
 	private int featureNum;
 	private int classNum;
 
+	private int swarmSize;
 	private int maxCycle;
 	private int trialLimit;
-	private int employeNum;
-	private int onlookerNum;
-	private int scoutNum;
+	private double mistakeRate;
 
 	private Bee<double[][]>[] bees;
 	private double[][] bestMemory;
@@ -30,7 +29,7 @@ public class ClusteringSAHive implements java.io.Serializable {
 
 	private double[][] genNeighbor(double[][] memory, double[][] neihborMemory) {
 		double[][] nextMem = new double[classNum][featureNum];
-		for (int i = 0; i < classNum; ++i)
+		for (int i = 0; i < classNum; ++i) {
 			for (int j = 0; j < featureNum; ++j) {
 				nextMem[i][j] = memory[i][j] + (2 * Rand.nextDouble() - 1) * (memory[i][j] - neihborMemory[i][j]);
 				if (nextMem[i][j] < 0.0)
@@ -38,6 +37,7 @@ public class ClusteringSAHive implements java.io.Serializable {
 				if (nextMem[i][j] > 1.0)
 					nextMem[i][j] = 1.0;
 			}
+		}
 		return nextMem;
 	}
 
@@ -58,27 +58,26 @@ public class ClusteringSAHive implements java.io.Serializable {
 		return 1.0 / fitness;
 	}
 
-	public ClusteringSAHive(double[][] data, int classNum, int maxCycle, int trialLimit, int employeNum, int onlookerNum,
-			int scoutNum) {
+	public ClusteringSAHive(double[][] data, int classNum, int swarmSize, int maxCycle, int trialLimit,
+			double mistakeRate) {
 		this.data = data;
 		this.sampleNum = data.length;
 		this.featureNum = data[0].length;
 		this.classNum = classNum;
 
+		this.swarmSize = swarmSize;
 		this.maxCycle = maxCycle;
 		this.trialLimit = trialLimit;
-		this.employeNum = employeNum;
-		this.onlookerNum = onlookerNum;
-		this.scoutNum = scoutNum;
-		
+		this.mistakeRate = mistakeRate;
+
 		this.bestFitness = 0.0;
 	}
 
 	@SuppressWarnings("unchecked")
 	public void solve() {
 		// init
-		bees = new Bee[employeNum];
-		for (int i = 0; i < employeNum; ++i) {
+		bees = new Bee[swarmSize];
+		for (int i = 0; i < swarmSize; ++i) {
 			double[][] randMem = genRandom();
 			double randFit = calcFitness(randMem);
 			bees[i] = new Bee<double[][]>(randMem, randFit, 0);
@@ -91,19 +90,30 @@ public class ClusteringSAHive implements java.io.Serializable {
 		// main loop
 		for (int i = 0; i < maxCycle; ++i) {
 			double sumOfFitness = 0.0;
-
-			// employe bees
-			for (int j = 0; j < employeNum; ++j) {
+			
+			for (int j = 0; j < swarmSize; ++j) {
+				// employe bees
 				if (bees[j].trial < trialLimit) {
-					double[][] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(employeNum)].memory);
+					double[][] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(swarmSize)].memory);
 					double neighborFit = calcFitness(neighborMem);
 					if (bees[j].fitness < neighborFit) {
-						bees[j].memory = neighborMem;
-						bees[j].fitness = neighborFit;
-						bees[j].trial = 0;
-					} else
-						++bees[j].trial;
-				} else {
+						if (Rand.nextDouble() > mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					} else {
+						if (Rand.nextDouble() < mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					}
+				}
+				// scout bees
+				else {
 					bees[j].memory = genRandom();
 					bees[j].fitness = calcFitness(bees[j].memory);
 					bees[j].trial = 0;
@@ -113,20 +123,29 @@ public class ClusteringSAHive implements java.io.Serializable {
 			}
 
 			// onlooker bees
-			for (int j = 0; j < employeNum; ++j) {
-				for (int k = 0; k < onlookerNum * bees[j].fitness / sumOfFitness; ++k) {
-					int neighborIndex = Rand.nextInt(employeNum);
+			for (int j = 0; j < swarmSize; ++j) {
+				for (int k = 0; k < swarmSize * bees[j].fitness / sumOfFitness; ++k) {
+					int neighborIndex = Rand.nextInt(swarmSize);
 					while (neighborIndex == j)
-						neighborIndex = Rand.nextInt(employeNum);
+						neighborIndex = Rand.nextInt(swarmSize);
 
 					double[][] neighborMem = genNeighbor(bees[j].memory, bees[neighborIndex].memory);
 					double neighborFit = calcFitness(neighborMem);
 					if (bees[j].fitness < neighborFit) {
-						bees[j].memory = neighborMem;
-						bees[j].fitness = neighborFit;
-						bees[j].trial = 0;
-					} else
-						++bees[j].trial;
+						if (Rand.nextDouble() > mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					} else {
+						if (Rand.nextDouble() < mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					}
 				}
 
 				if (bestFitness < bees[j].fitness) {
@@ -134,23 +153,17 @@ public class ClusteringSAHive implements java.io.Serializable {
 					bestFitness = bees[j].fitness;
 				}
 			}
-
-			// scout bees
-			for (int j = 0; j < scoutNum; ++j) {
-				double[][] randMem = genRandom();
-				double randFit = calcFitness(randMem);
-				if (bestFitness < randFit) {
-					bestMemory = randMem;
-					bestFitness = randFit;
-				}
-			}
 			
+			if ((i + 1) * 10 % maxCycle == 0)
+				System.out.print('#');
+				
 			//show();
 		}
+		System.out.println();
 	}
 
 	public void show() {
-		System.out.println("fitness: " + 1.0 / bestFitness);
+		System.out.println(String.format("fitness: %.2f", 1.0 / bestFitness));
 		System.out.print("center: ");
 		for (int i = 0; i < classNum; ++i) {
 			for (int j = 0; j < featureNum; ++j)
@@ -158,7 +171,7 @@ public class ClusteringSAHive implements java.io.Serializable {
 			System.out.println();
 		}
 	}
-	
+
 	public int predict(double[] features) {
 		int predictLabel = 0;
 		double distance = Double.MAX_VALUE;

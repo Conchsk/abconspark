@@ -9,16 +9,15 @@ public class FunctionSAHive implements java.io.Serializable {
 	private int dataCount;
 	private int dimension;
 
+	private int swarmSize;
 	private int maxCycle;
 	private int trialLimit;
-	private int employeNum;
-	private int onlookerNum;
-	private int scoutNum;
+	private double mistakeRate;
 
 	private Bee<double[]>[] bees;
 	private double[] bestMemory;
 	private double bestFitness;
-	
+
 	public double[] genRandom() {
 		double[] newMemory = new double[dimension];
 		for (int i = 0; i < newMemory.length; ++i)
@@ -39,40 +38,39 @@ public class FunctionSAHive implements java.io.Serializable {
 	}
 
 	public double calcFitness(double[] memory) {
-		double fitness = 0.0;
-		for (int i = 0; i < dataCount; ++i)
-			fitness += Math.pow(errorCalc(memory, data[i]), 2);
+		// double fitness = 0.0;
+		// for (int i = 0; i < dataCount; ++i)
+		// fitness += Math.pow(errorCalc(memory, data[i]), 2);
+		// return 1.0 / (fitness + 1.0);
+		double fitness = memory[0] * memory[0] + memory[1] * memory[1] + memory[2] * memory[2] + memory[3] * memory[3]
+				+ memory[4] * memory[4];
 		return 1.0 / (fitness + 1.0);
 	}
-	
-	private double errorCalc(double[] param, double[] x) {
-		return (80.0 - param[0]) * Math.pow(x[0], 3.0)
-			+ (40.0 - param[1]) * Math.pow(x[1], 2.0)
-			+ (1.0 - param[2]) * Math.pow(x[2], 1.0)
-			+ (-40.0 - param[3]) * Math.pow(x[3], 2.0)
-			+ (-80.0 - param[4]) * Math.pow(x[4], 3.0);
-	}
-	
-	public FunctionSAHive(double[][] data, int maxCycle, int trialLimit, int employeNum, int onlookerNum,
-			int scoutNum) {
+
+//	private double errorCalc(double[] param, double[] x) {
+//		return (80.0 - param[0]) * Math.pow(x[0], 3.0) + (40.0 - param[1]) * Math.pow(x[1], 2.0)
+//				+ (1.0 - param[2]) * Math.pow(x[2], 1.0) + (-40.0 - param[3]) * Math.pow(x[3], 2.0)
+//				+ (-80.0 - param[4]) * Math.pow(x[4], 3.0);
+//	}
+
+	public FunctionSAHive(double[][] data, int swarmSize, int maxCycle, int trialLimit, double mistakeRate) {
 		this.data = data;
 		this.dataCount = data.length;
 		this.dimension = data[0].length;
 
+		this.swarmSize = swarmSize;
 		this.maxCycle = maxCycle;
 		this.trialLimit = trialLimit;
-		this.employeNum = employeNum;
-		this.onlookerNum = onlookerNum;
-		this.scoutNum = scoutNum;
-		
+		this.mistakeRate = mistakeRate;
+
 		this.bestFitness = 0.0;
 	}
 
 	@SuppressWarnings("unchecked")
 	public void solve() {
 		// init
-		bees = new Bee[employeNum];
-		for (int i = 0; i < employeNum; ++i) {
+		bees = new Bee[swarmSize];
+		for (int i = 0; i < swarmSize; ++i) {
 			double[] randMem = genRandom();
 			double randFit = calcFitness(randMem);
 			bees[i] = new Bee<double[]>(randMem, randFit, 0);
@@ -86,17 +84,26 @@ public class FunctionSAHive implements java.io.Serializable {
 		for (int i = 0; i < maxCycle; ++i) {
 			double sumOfFitness = 0.0;
 
-			// employe bees
-			for (int j = 0; j < employeNum; ++j) {
+			for (int j = 0; j < swarmSize; ++j) {
+				// employe bees
 				if (bees[j].trial < trialLimit) {
-					double[] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(employeNum)].memory);
+					double[] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(swarmSize)].memory);
 					double neighborFit = calcFitness(neighborMem);
 					if (bees[j].fitness < neighborFit) {
-						bees[j].memory = neighborMem;
-						bees[j].fitness = neighborFit;
-						bees[j].trial = 0;
-					} else
-						++bees[j].trial;
+						if (Rand.nextDouble() > mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					} else {
+						if (Rand.nextDouble() < mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					}
 				} else {
 					bees[j].memory = genRandom();
 					bees[j].fitness = calcFitness(bees[j].memory);
@@ -107,47 +114,49 @@ public class FunctionSAHive implements java.io.Serializable {
 			}
 
 			// onlooker bees
-			for (int j = 0; j < employeNum; ++j) {
-				for (int k = 0; k < onlookerNum * bees[j].fitness / sumOfFitness; ++k) {
-					int neighborIndex = Rand.nextInt(employeNum);
+			for (int j = 0; j < swarmSize; ++j) {
+				for (int k = 0; k < swarmSize * bees[j].fitness / sumOfFitness; ++k) {
+					int neighborIndex = Rand.nextInt(swarmSize);
 					while (neighborIndex == j)
-						neighborIndex = Rand.nextInt(employeNum);
+						neighborIndex = Rand.nextInt(swarmSize);
 
 					double[] neighborMem = genNeighbor(bees[j].memory, bees[neighborIndex].memory);
 					double neighborFit = calcFitness(neighborMem);
 					if (bees[j].fitness < neighborFit) {
-						bees[j].memory = neighborMem;
-						bees[j].fitness = neighborFit;
-						bees[j].trial = 0;
-					} else
-						++bees[j].trial;
+						if (Rand.nextDouble() > mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					} else {
+						if (Rand.nextDouble() < mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					}
 				}
 
 				if (bestFitness < bees[j].fitness) {
 					bestMemory = bees[j].memory;
 					bestFitness = bees[j].fitness;
+					System.out.println("onlooker");
 				}
 			}
 
-			// scout bees
-			for (int j = 0; j < scoutNum; ++j) {
-				double[] randMem = genRandom();
-				double randFit = calcFitness(randMem);
-				if (bestFitness < randFit) {
-					bestMemory = randMem;
-					bestFitness = randFit;
-				}
-			}
-			
-			//show();
+			if ((i + 1) * 10 % maxCycle == 0)
+				System.out.print('#');
 		}
+		System.out.println();
 	}
 
 	public void show() {
 		System.out.println("fitness: " + (1.0 / bestFitness - 1.0));
 		System.out.print("paramPredict: ");
 		for (int i = 0; i < dimension; ++i)
-			System.out.print(String.format("%.2f ", bestMemory[i]));			
+			System.out.print(String.format("%.2f ", bestMemory[i]));
 		System.out.println();
 	}
 }
