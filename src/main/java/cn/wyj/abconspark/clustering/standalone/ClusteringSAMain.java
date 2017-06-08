@@ -6,21 +6,21 @@ import java.util.Scanner;
 
 public class ClusteringSAMain {
 	public static void main(String[] args) throws FileNotFoundException {
-		double[][] data = readCSV("F:/wine_mm.csv", 178, 5);
-		int classNum = 3;		
+		double[][] data = readCSV("F:/VMware/kddcup/kddcup4_mm.csv", 485269, 23);
+		int classNum = 3;
 		int swarmSize = 50;
-		int maxCycle = 1000;
+		int maxCycle = 10;
 		int trialLimit = 100;
 		double mistakeRate = 0.05;
 
 		ClusteringSAHive hive = new ClusteringSAHive(data, classNum, swarmSize, maxCycle, trialLimit, mistakeRate);
 		hive.solve();
 		hive.show();
-		for (int i = 0; i < data.length; ++i) {
-			System.out.print(hive.predict(data[i]) + " ");
-			if ((i + 1) % 50 == 0)
-				System.out.println();
-		}
+//		for (int i = 0; i < data.length; ++i) {
+//			System.out.print(hive.predict(data[i]) + " ");
+//			if ((i + 1) % 50 == 0)
+//				System.out.println();
+//		}
 	}
 
 	public static double[][] readCSV(String uri, int sampleNum, int featureNum) throws FileNotFoundException {

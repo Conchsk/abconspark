@@ -1,23 +1,24 @@
 package cn.wyj.abconspark.clustering.distribute;
 
-import org.apache.spark.api.java.JavaRDD;
-import org.apache.spark.mllib.regression.LabeledPoint;
+import org.apache.spark.api.java.function.MapFunction;
+import org.apache.spark.ml.feature.LabeledPoint;
+import org.apache.spark.sql.Dataset;
+import org.apache.spark.sql.Encoders;
 
 import cn.wyj.abconspark.Bee;
 import cn.wyj.abconspark.Rand;
+import scala.Tuple2;
 
 @SuppressWarnings("serial")
 public class ClusteringDTHive implements java.io.Serializable {
-	private JavaRDD<LabeledPoint> data;
-	//private int sampleNum;
+	private Dataset<LabeledPoint> data;
 	private int featureNum;
 	private int classNum;
 
+	private int swarmSize;
 	private int maxCycle;
 	private int trialLimit;
-	private int employeNum;
-	private int onlookerNum;
-	private int scoutNum;
+	private double mistakeRate;
 
 	private Bee<double[][]>[] bees;
 	private double[][] bestMemory;
@@ -56,21 +57,19 @@ public class ClusteringDTHive implements java.io.Serializable {
 					distance = temp;
 			}
 			return distance;
-		}).reduce((a, b) -> a + b);
+		}, Encoders.DOUBLE()).reduce((a, b) -> a + b);
 	}
 
-	public ClusteringDTHive(JavaRDD<LabeledPoint> data, int classNum, int maxCycle, int trialLimit, int employeNum, int onlookerNum,
-			int scoutNum) {
+	public ClusteringDTHive(Dataset<LabeledPoint> data, int classNum, int swarmSize, int maxCycle, int trialLimit,
+			double mistakeRate) {
 		this.data = data;
-		//this.sampleNum = (int) data.count();
-		this.featureNum = data.top(1).get(0).features().size();
+		this.featureNum = data.first().features().size();
 		this.classNum = classNum;
 
+		this.swarmSize = swarmSize;
 		this.maxCycle = maxCycle;
 		this.trialLimit = trialLimit;
-		this.employeNum = employeNum;
-		this.onlookerNum = onlookerNum;
-		this.scoutNum = scoutNum;
+		this.mistakeRate = mistakeRate;
 		
 		this.bestFitness = 0.0;
 	}
@@ -78,8 +77,8 @@ public class ClusteringDTHive implements java.io.Serializable {
 	@SuppressWarnings("unchecked")
 	public void solve() {
 		// init
-		bees = new Bee[employeNum];
-		for (int i = 0; i < employeNum; ++i) {
+		bees = new Bee[swarmSize];
+		for (int i = 0; i < swarmSize; ++i) {
 			double[][] randMem = genRandom();
 			double randFit = calcFitness(randMem);
 			bees[i] = new Bee<double[][]>(randMem, randFit, 0);
@@ -92,19 +91,30 @@ public class ClusteringDTHive implements java.io.Serializable {
 		// main loop
 		for (int i = 0; i < maxCycle; ++i) {
 			double sumOfFitness = 0.0;
-
-			// employe bees
-			for (int j = 0; j < employeNum; ++j) {
+			
+			for (int j = 0; j < swarmSize; ++j) {
+				// employe bees
 				if (bees[j].trial < trialLimit) {
-					double[][] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(employeNum)].memory);
+					double[][] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(swarmSize)].memory);
 					double neighborFit = calcFitness(neighborMem);
 					if (bees[j].fitness < neighborFit) {
-						bees[j].memory = neighborMem;
-						bees[j].fitness = neighborFit;
-						bees[j].trial = 0;
-					} else
-						++bees[j].trial;
-				} else {
+						if (Rand.nextDouble() > mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					} else {
+						if (Rand.nextDouble() < mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					}
+				}
+				// scout bees
+				else {
 					bees[j].memory = genRandom();
 					bees[j].fitness = calcFitness(bees[j].memory);
 					bees[j].trial = 0;
@@ -114,20 +124,29 @@ public class ClusteringDTHive implements java.io.Serializable {
 			}
 
 			// onlooker bees
-			for (int j = 0; j < employeNum; ++j) {
-				for (int k = 0; k < onlookerNum * bees[j].fitness / sumOfFitness; ++k) {
-					int neighborIndex = Rand.nextInt(employeNum);
+			for (int j = 0; j < swarmSize; ++j) {
+				for (int k = 0; k < swarmSize * bees[j].fitness / sumOfFitness; ++k) {
+					int neighborIndex = Rand.nextInt(swarmSize);
 					while (neighborIndex == j)
-						neighborIndex = Rand.nextInt(employeNum);
+						neighborIndex = Rand.nextInt(swarmSize);
 
 					double[][] neighborMem = genNeighbor(bees[j].memory, bees[neighborIndex].memory);
 					double neighborFit = calcFitness(neighborMem);
 					if (bees[j].fitness < neighborFit) {
-						bees[j].memory = neighborMem;
-						bees[j].fitness = neighborFit;
-						bees[j].trial = 0;
-					} else
-						++bees[j].trial;
+						if (Rand.nextDouble() > mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					} else {
+						if (Rand.nextDouble() < mistakeRate) {
+							bees[j].memory = neighborMem;
+							bees[j].fitness = neighborFit;
+							bees[j].trial = 0;
+						} else
+							++bees[j].trial;
+					}
 				}
 
 				if (bestFitness < bees[j].fitness) {
@@ -135,18 +154,7 @@ public class ClusteringDTHive implements java.io.Serializable {
 					bestFitness = bees[j].fitness;
 				}
 			}
-
-			// scout bees
-			for (int j = 0; j < scoutNum; ++j) {
-				double[][] randMem = genRandom();
-				double randFit = calcFitness(randMem);
-				if (bestFitness < randFit) {
-					bestMemory = randMem;
-					bestFitness = randFit;
-				}
-			}
-			
-			//show();
+			System.out.println(i);
 		}
 	}
 
@@ -160,19 +168,24 @@ public class ClusteringDTHive implements java.io.Serializable {
 		}
 	}
 	
-	public int predict(double[] features) {
-		int predictLabel = 0;
-		double distance = Double.MAX_VALUE;
-		for (int i = 0; i < classNum; ++i) {
-			double temp = 0.0;
-			for (int j = 0; j < featureNum; ++j)
-				temp += Math.pow(features[j] - bestMemory[i][j], 2.0);
-			temp = Math.pow(temp, 0.5);
-			if (distance > temp) {
-				distance = temp;
-				predictLabel = i;
+	public Dataset<Tuple2<Integer, Double>> predict(Dataset<LabeledPoint> features) {
+		return features.map(new MapFunction<LabeledPoint, Tuple2<Integer, Double>>() {
+			@Override
+			public Tuple2<Integer, Double> call(LabeledPoint arg0) throws Exception {
+				int predictLabel = 0;
+				double distance = Double.MAX_VALUE;
+				for (int i = 0; i < classNum; ++i) {
+					double temp = 0.0;
+					for (int j = 0; j < featureNum; ++j)
+						temp += Math.pow(arg0.features().apply(j) - bestMemory[i][j], 2.0);
+					temp = Math.pow(temp, 0.5);
+					if (distance > temp) {
+						distance = temp;
+						predictLabel = i;
+					}
+				}
+				return new Tuple2<Integer, Double>(predictLabel, arg0.label()) ;
 			}
-		}
-		return predictLabel;
+		}, Encoders.tuple(Encoders.INT(), Encoders.DOUBLE()));
 	}
 }
