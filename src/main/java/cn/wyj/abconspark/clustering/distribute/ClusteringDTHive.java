@@ -109,18 +109,43 @@ public class ClusteringDTHive implements java.io.Serializable {
 			start = System.currentTimeMillis();
 			System.out.println("cycle " + i + " start");
 			
-			Bee<double[][]> bestBee = rdd.reduce((a, b) -> a.fitness > b.fitness ? a : b);
+			// find best solution so far
+			Bee<double[][]> bestBee = rdd.mapPartitions(v -> {
+				List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
+				double[][] tempMem = null;
+				double tempFit = 0.0;
+				while (v.hasNext()) {
+					Bee<double[][]> bee = v.next();
+					if (tempFit < bee.fitness) {
+						tempMem = bee.memory;
+						tempFit = bee.fitness;
+					}
+				}
+				ret.add(new Bee<double[][]>(tempMem, tempFit, 0));
+				return ret.iterator();
+			}).reduce((a, b) -> a.fitness > b.fitness ? a : b);
+			
 			if (bestFitness < bestBee.fitness) {
 				bestMemory = bestBee.memory;
 				bestFitness = bestBee.fitness;
 			}
 			
-			double sumOfFitness = rdd.reduce((a, b) -> {
+			// calc SumOfFitness
+			double sumOfFitness = rdd.mapPartitions(v -> {
+				List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
+				double tempSumFit = 0.0;
+				while (v.hasNext()) {
+					Bee<double[][]> bee = v.next();
+					tempSumFit += bee.fitness;
+				}				
+				ret.add(new Bee<double[][]>(null, tempSumFit, 0));
+				return ret.iterator();
+			}).reduce((a, b) -> {
 				a.fitness += b.fitness;
 				return a;
 			}).fitness;
 			
-			
+			// main proc
 			rdd = rdd.mapPartitions(v -> {
 				List<Bee<double[][]>> beeList = new ArrayList<Bee<double[][]>>();
 				while (v.hasNext())
@@ -180,7 +205,7 @@ public class ClusteringDTHive implements java.io.Serializable {
 	}
 
 	public void predict(JavaRDD<LabeledPoint> features) {
-		return features.mapToPair(v -> {
+		features.mapToPair(v -> {
 			int predictLabel = 0;
 			double distance = Double.MAX_VALUE;
 			for (int i = 0; i < classNum; ++i) {
