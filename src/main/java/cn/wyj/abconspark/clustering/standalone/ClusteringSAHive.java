@@ -16,7 +16,7 @@ public class ClusteringSAHive implements java.io.Serializable {
 	private double mistakeRate;
 
 	private Bee<double[][]>[] bees;
-	private double[][] bestMemory;
+	public double[][] bestMemory;
 	private double bestFitness;
 
 	private double[][] genRandom() {
@@ -41,7 +41,7 @@ public class ClusteringSAHive implements java.io.Serializable {
 		return nextMem;
 	}
 
-	private double calcFitness(double[][] memory) {
+	public double calcFitness(double[][] memory) {
 		double fitness = 0.0;
 		for (int i = 0; i < sampleNum; ++i) {
 			double distance = Double.MAX_VALUE;
@@ -75,7 +75,12 @@ public class ClusteringSAHive implements java.io.Serializable {
 
 	@SuppressWarnings("unchecked")
 	public void solve() {
+		long start, stop;
+		
 		// init
+		start = System.currentTimeMillis();
+		System.out.println("init start");
+		
 		bees = new Bee[swarmSize];
 		for (int i = 0; i < swarmSize; ++i) {
 			double[][] randMem = genRandom();
@@ -86,30 +91,44 @@ public class ClusteringSAHive implements java.io.Serializable {
 				bestFitness = randFit;
 			}
 		}
+		
+		stop = System.currentTimeMillis();
+		System.out.println("init finished after " + (stop - start) / 1000.0 + " s");
 
 		// main loop
 		for (int i = 0; i < maxCycle; ++i) {
+			start = System.currentTimeMillis();
+			System.out.println("one cycle start");
+			
 			double sumOfFitness = 0.0;
+			for (int j = 0; j < swarmSize; ++j)
+				sumOfFitness += bees[j].fitness;
 			
 			for (int j = 0; j < swarmSize; ++j) {
-				// employe bees
+				// employe bees & onlooker bees
 				if (bees[j].trial < trialLimit) {
-					double[][] neighborMem = genNeighbor(bees[j].memory, bees[Rand.nextInt(swarmSize)].memory);
-					double neighborFit = calcFitness(neighborMem);
-					if (bees[j].fitness < neighborFit) {
-						if (Rand.nextDouble() > mistakeRate) {
-							bees[j].memory = neighborMem;
-							bees[j].fitness = neighborFit;
-							bees[j].trial = 0;
-						} else
-							++bees[j].trial;
-					} else {
-						if (Rand.nextDouble() < mistakeRate) {
-							bees[j].memory = neighborMem;
-							bees[j].fitness = neighborFit;
-							bees[j].trial = 0;
-						} else
-							++bees[j].trial;
+					for (int k = 0; k < swarmSize * bees[j].fitness / sumOfFitness; ++k) {
+						int neighborIndex = Rand.nextInt(swarmSize);
+						while (neighborIndex == j)
+							neighborIndex = Rand.nextInt(swarmSize);
+
+						double[][] neighborMem = genNeighbor(bees[j].memory, bees[neighborIndex].memory);
+						double neighborFit = calcFitness(neighborMem);
+						if (bees[j].fitness < neighborFit) {
+							if (Rand.nextDouble() > mistakeRate) {
+								bees[j].memory = neighborMem;
+								bees[j].fitness = neighborFit;
+								bees[j].trial = 0;
+							} else
+								++bees[j].trial;
+						} else {
+							if (Rand.nextDouble() < mistakeRate) {
+								bees[j].memory = neighborMem;
+								bees[j].fitness = neighborFit;
+								bees[j].trial = 0;
+							} else
+								++bees[j].trial;
+						}
 					}
 				}
 				// scout bees
@@ -118,58 +137,32 @@ public class ClusteringSAHive implements java.io.Serializable {
 					bees[j].fitness = calcFitness(bees[j].memory);
 					bees[j].trial = 0;
 				}
-
-				sumOfFitness += bees[j].fitness;
-			}
-
-			// onlooker bees
-			for (int j = 0; j < swarmSize; ++j) {
-				for (int k = 0; k < swarmSize * bees[j].fitness / sumOfFitness; ++k) {
-					int neighborIndex = Rand.nextInt(swarmSize);
-					while (neighborIndex == j)
-						neighborIndex = Rand.nextInt(swarmSize);
-
-					double[][] neighborMem = genNeighbor(bees[j].memory, bees[neighborIndex].memory);
-					double neighborFit = calcFitness(neighborMem);
-					if (bees[j].fitness < neighborFit) {
-						if (Rand.nextDouble() > mistakeRate) {
-							bees[j].memory = neighborMem;
-							bees[j].fitness = neighborFit;
-							bees[j].trial = 0;
-						} else
-							++bees[j].trial;
-					} else {
-						if (Rand.nextDouble() < mistakeRate) {
-							bees[j].memory = neighborMem;
-							bees[j].fitness = neighborFit;
-							bees[j].trial = 0;
-						} else
-							++bees[j].trial;
-					}
-				}
-
+				
 				if (bestFitness < bees[j].fitness) {
 					bestMemory = bees[j].memory;
 					bestFitness = bees[j].fitness;
 				}
 			}
 			
-			if ((i + 1) * 10 % maxCycle == 0)
-				System.out.print('#');
+			stop = System.currentTimeMillis();
+			System.out.println("one cycle finished after " + (stop - start) / 1000.0 + " s");
+			
+			//if ((i + 1) * 10 % maxCycle == 0)
+			//	System.out.print('#');
 				
-			//show();
+			show();
 		}
 		System.out.println();
 	}
 
 	public void show() {
 		System.out.println(String.format("fitness: %.2f", 1.0 / bestFitness));
-		System.out.print("center: ");
-		for (int i = 0; i < classNum; ++i) {
-			for (int j = 0; j < featureNum; ++j)
-				System.out.print(String.format("%.2f ", bestMemory[i][j]));
-			System.out.println();
-		}
+//		System.out.print("center: ");
+//		for (int i = 0; i < classNum; ++i) {
+//			for (int j = 0; j < featureNum; ++j)
+//				System.out.print(String.format("%.2f ", bestMemory[i][j]));
+//			System.out.println();
+//		}
 	}
 
 	public int predict(double[] features) {
