@@ -16,7 +16,7 @@ import scala.Tuple2;
 
 @SuppressWarnings("serial")
 public class ClusteringDTHive implements java.io.Serializable {
-	private List<LabeledPoint> data;
+	private JavaRDD<LabeledPoint> data;
 	private int sampleNum;
 	private int featureNum;
 	private int classNum;
@@ -54,25 +54,30 @@ public class ClusteringDTHive implements java.io.Serializable {
 	}
 
 	private double calcFitness(double[][] memory) {
-		double fitness = 0.0;
-		for (int i = 0; i < sampleNum; ++i) {
-			double distance = Double.MAX_VALUE;
-			for (int j = 0; j < classNum; ++j) {
-				double temp = 0.0;
-				for (int k = 0; k < featureNum; ++k)
-					temp += Math.pow(data.get(i).features().apply(k) - memory[j][k], 2.0);
-				temp = Math.pow(temp, 0.5);
-				if (distance > temp)
-					distance = temp;
+		return 1.0 / data.mapPartitionsToDouble(v -> {
+			double fitness = 0.0;
+			while (v.hasNext()) {
+				LabeledPoint lp = v.next();
+				double distance = Double.MAX_VALUE;
+				for (int j = 0; j < classNum; ++j) {
+					double temp = 0.0;
+					for (int k = 0; k < featureNum; ++k)
+						temp += Math.pow(lp.features().apply(k) - memory[j][k], 2.0);
+					temp = Math.pow(temp, 0.5);
+					if (distance > temp)
+						distance = temp;
+				}
+				fitness += distance;
 			}
-			fitness += distance;
-		}
-		return 1.0 / fitness;
+			List<Double> ret = new ArrayList<Double>();
+			ret.add(fitness);
+			return ret.iterator();
+		}).reduce((a, b) -> a + b);
 	}
 
 	public ClusteringDTHive(JavaRDD<LabeledPoint> data, int classNum,
 			int swarmSize, int maxCycle, int trialLimit, double mistakeRate) {
-		this.data = data.collect();
+		this.data = data;
 		this.sampleNum = (int) data.count();
 		this.featureNum = data.first().features().size();
 		this.classNum = classNum;
@@ -109,18 +114,43 @@ public class ClusteringDTHive implements java.io.Serializable {
 			start = System.currentTimeMillis();
 			System.out.println("cycle " + i + " start");
 			
-			Bee<double[][]> bestBee = rdd.reduce((a, b) -> a.fitness > b.fitness ? a : b);
+			// find best solution so far
+			Bee<double[][]> bestBee = rdd.mapPartitions(v -> {
+				List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
+				double[][] tempMem = null;
+				double tempFit = 0.0;
+				while (v.hasNext()) {
+					Bee<double[][]> bee = v.next();
+					if (tempFit < bee.fitness) {
+						tempMem = bee.memory;
+						tempFit = bee.fitness;
+					}
+				}
+				ret.add(new Bee<double[][]>(tempMem, tempFit, 0));
+				return ret.iterator();
+			}).reduce((a, b) -> a.fitness > b.fitness ? a : b);
+			
 			if (bestFitness < bestBee.fitness) {
 				bestMemory = bestBee.memory;
 				bestFitness = bestBee.fitness;
 			}
 			
-			double sumOfFitness = rdd.reduce((a, b) -> {
+			// calc SumOfFitness
+			double sumOfFitness = rdd.mapPartitions(v -> {
+				List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
+				double tempSumFit = 0.0;
+				while (v.hasNext()) {
+					Bee<double[][]> bee = v.next();
+					tempSumFit += bee.fitness;
+				}				
+				ret.add(new Bee<double[][]>(null, tempSumFit, 0));
+				return ret.iterator();
+			}).reduce((a, b) -> {
 				a.fitness += b.fitness;
 				return a;
 			}).fitness;
 			
-			
+			// main proc
 			rdd = rdd.mapPartitions(v -> {
 				List<Bee<double[][]>> beeList = new ArrayList<Bee<double[][]>>();
 				while (v.hasNext())
@@ -180,7 +210,7 @@ public class ClusteringDTHive implements java.io.Serializable {
 	}
 
 	public void predict(JavaRDD<LabeledPoint> features) {
-		return features.mapToPair(v -> {
+		features.mapToPair(v -> {
 			int predictLabel = 0;
 			double distance = Double.MAX_VALUE;
 			for (int i = 0; i < classNum; ++i) {
