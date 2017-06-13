@@ -2,17 +2,18 @@ package cn.wyj.abconspark.clustering.distribute;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.DoubleFlatMapFunction;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.broadcast.Broadcast;
 import org.apache.spark.mllib.regression.LabeledPoint;
 import org.apache.spark.util.Utils;
 
 import cn.wyj.abconspark.Bee;
-import scala.Tuple2;
 
 @SuppressWarnings("serial")
 public class ClusteringDTHive implements java.io.Serializable {
@@ -53,14 +54,14 @@ public class ClusteringDTHive implements java.io.Serializable {
 		return nextMem;
 	}
 
-	private double calcFitness(double[][] memory) {
+	private double calcFitness(double[][] memory, Broadcast<List<LabeledPoint>> lp) {
 		double fitness = 0.0;
 		for (int i = 0; i < sampleNum; ++i) {
 			double distance = Double.MAX_VALUE;
 			for (int j = 0; j < classNum; ++j) {
 				double temp = 0.0;
 				for (int k = 0; k < featureNum; ++k)
-					temp += Math.pow(data.get(i).features().apply(k) - memory[j][k], 2.0);
+					temp += Math.pow(lp.value().get(i).features().apply(k) - memory[j][k], 2.0);
 				temp = Math.pow(temp, 0.5);
 				if (distance > temp)
 					distance = temp;
@@ -87,6 +88,8 @@ public class ClusteringDTHive implements java.io.Serializable {
 
 	@SuppressWarnings("unchecked")
 	public void solve(JavaSparkContext sc) {
+		final Broadcast<List<LabeledPoint>> lp = sc.broadcast(data);
+		
 		long start, stop;
 
 		// init
@@ -96,10 +99,10 @@ public class ClusteringDTHive implements java.io.Serializable {
 		Bee<double[][]>[] beeArray = new Bee[swarmSize];
 		for (int i = 0; i < swarmSize; ++i) {
 			double[][] randMem = genRandom();
-			double randFit = calcFitness(randMem);
+			double randFit = calcFitness(randMem, lp);
 			beeArray[i] = new Bee<double[][]>(randMem, randFit, 0);
 		}		
-		JavaRDD<Bee<double[][]>> rdd = sc.parallelize(Arrays.asList(beeArray)).cache();
+		JavaRDD<Bee<double[][]>> rdd = sc.parallelize(Arrays.asList(beeArray)).cache();		
 		
 		stop = System.currentTimeMillis();
 		System.out.println("init finished after " + (stop - start) / 1000.0 + " s");
@@ -110,20 +113,29 @@ public class ClusteringDTHive implements java.io.Serializable {
 			System.out.println("cycle " + i + " start");
 			
 			// find best solution so far
-			Bee<double[][]> bestBee = rdd.mapPartitions(v -> {
-				List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
-				double[][] tempMem = null;
-				double tempFit = 0.0;
-				while (v.hasNext()) {
-					Bee<double[][]> bee = v.next();
-					if (tempFit < bee.fitness) {
-						tempMem = bee.memory;
-						tempFit = bee.fitness;
+			Bee<double[][]> bestBee = rdd.mapPartitions(new FlatMapFunction<Iterator<Bee<double[][]>>, Bee<double[][]>>() {
+				@Override
+				public Iterable<Bee<double[][]>> call(Iterator<Bee<double[][]>> v) throws Exception {
+					List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
+					double[][] tempMem = null;
+					double tempFit = 0.0;
+					while (v.hasNext()) {
+						Bee<double[][]> bee = v.next();
+						if (tempFit < bee.fitness) {
+							tempMem = bee.memory;
+							tempFit = bee.fitness;
+						}
 					}
+					ret.add(new Bee<double[][]>(tempMem, tempFit, 0));
+					return ret;
 				}
-				ret.add(new Bee<double[][]>(tempMem, tempFit, 0));
-				return ret.iterator();
-			}).reduce((a, b) -> a.fitness > b.fitness ? a : b);
+			}).reduce(new Function2<Bee<double[][]>, Bee<double[][]>, Bee<double[][]>>() {
+				@Override
+				public Bee<double[][]> call(Bee<double[][]> a,
+						Bee<double[][]> b) throws Exception {
+					return a.fitness > b.fitness ? a : b;
+				}
+			});
 			
 			if (bestFitness < bestBee.fitness) {
 				bestMemory = bestBee.memory;
@@ -131,58 +143,64 @@ public class ClusteringDTHive implements java.io.Serializable {
 			}
 			
 			// calc SumOfFitness
-			double sumOfFitness = rdd.mapPartitionsToDouble(v -> {
-				List<Double> ret = new ArrayList<Double>();
-				double tempSumFit = 0.0;
-				while (v.hasNext()) {
-					Bee<double[][]> bee = v.next();
-					tempSumFit += bee.fitness;
-				}				
-				ret.add(tempSumFit);
-				return ret.iterator();
+			final double sumOfFitness = rdd.mapPartitionsToDouble(new DoubleFlatMapFunction<Iterator<Bee<double[][]>>>() {
+				@Override
+				public Iterable<Double> call(Iterator<Bee<double[][]>> v) throws Exception {
+					List<Double> ret = new ArrayList<Double>();
+					double tempSumFit = 0.0;
+					while (v.hasNext()) {
+						Bee<double[][]> bee = v.next();
+						tempSumFit += bee.fitness;
+					}				
+					ret.add(tempSumFit);
+					return ret;
+				}
 			}).sum();
 			
 			// main proc
-			rdd = rdd.mapPartitions(v -> {
-				List<Bee<double[][]>> beeList = new ArrayList<Bee<double[][]>>();
-				while (v.hasNext())
-					beeList.add(v.next());
-				int partSwarmSize = beeList.size();
-				
-				List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
-				for (int j = 0; j < partSwarmSize; ++j) {
-					Bee<double[][]> bee = beeList.get(j);
-					if (bee.trial < trialLimit) {
-						for (int k = 0; k < swarmSize * bee.fitness / sumOfFitness; ++k) {
-							int neighborIndex = Utils.random().nextInt(partSwarmSize);
-							while (neighborIndex == j)
-								neighborIndex = Utils.random().nextInt(partSwarmSize);
-							double[][] neighborMem = genNeighbor(bee.memory, beeList.get(neighborIndex).memory);
-							double neighborFit = calcFitness(neighborMem);
-							if (bee.fitness < neighborFit) {
-								if (Utils.random().nextDouble() > mistakeRate) {
-									bee.memory = neighborMem;
-									bee.fitness = neighborFit;
-									bee.trial = 0;
-								} else
-									++bee.trial;
-							} else {
-								if (Utils.random().nextDouble() < mistakeRate) {
-									bee.memory = neighborMem;
-									bee.fitness = neighborFit;
-									bee.trial = 0;
-								} else
-									++bee.trial;
+			rdd = rdd.mapPartitions(new FlatMapFunction<Iterator<Bee<double[][]>>, Bee<double[][]>>() {
+				@Override
+				public Iterable<Bee<double[][]>> call(Iterator<Bee<double[][]>> v) throws Exception {
+					List<Bee<double[][]>> beeList = new ArrayList<Bee<double[][]>>();
+					while (v.hasNext())
+						beeList.add(v.next());
+					int partSwarmSize = beeList.size();
+					
+					List<Bee<double[][]>> ret = new ArrayList<Bee<double[][]>>();
+					for (int j = 0; j < partSwarmSize; ++j) {
+						Bee<double[][]> bee = beeList.get(j);
+						if (bee.trial < trialLimit) {
+							for (int k = 0; k < swarmSize * bee.fitness / sumOfFitness; ++k) {
+								int neighborIndex = Utils.random().nextInt(partSwarmSize);
+								while (neighborIndex == j)
+									neighborIndex = Utils.random().nextInt(partSwarmSize);
+								double[][] neighborMem = genNeighbor(bee.memory, beeList.get(neighborIndex).memory);
+								double neighborFit = calcFitness(neighborMem, lp);
+								if (bee.fitness < neighborFit) {
+									if (Utils.random().nextDouble() > mistakeRate) {
+										bee.memory = neighborMem;
+										bee.fitness = neighborFit;
+										bee.trial = 0;
+									} else
+										++bee.trial;
+								} else {
+									if (Utils.random().nextDouble() < mistakeRate) {
+										bee.memory = neighborMem;
+										bee.fitness = neighborFit;
+										bee.trial = 0;
+									} else
+										++bee.trial;
+								}
 							}
+						} else {
+							bee.memory = genRandom();
+							bee.fitness = calcFitness(bee.memory, lp);
+							bee.trial = 0;
 						}
-					} else {
-						bee.memory = genRandom();
-						bee.fitness = calcFitness(bee.memory);
-						bee.trial = 0;
+						ret.add(bee);
 					}
-					ret.add(bee);
+					return ret;
 				}
-				return ret.iterator();
 			}).cache();
 			
 			stop = System.currentTimeMillis();
@@ -201,36 +219,36 @@ public class ClusteringDTHive implements java.io.Serializable {
 		}
 	}
 
-	public void predict(JavaRDD<LabeledPoint> features) {
-		features.mapToPair(v -> {
-			int predictLabel = 0;
-			double distance = Double.MAX_VALUE;
-			for (int i = 0; i < classNum; ++i) {
-				double temp = 0.0;
-				for (int j = 0; j < featureNum; ++j)
-					temp += Math.pow(v.features().apply(j) - bestMemory[i][j], 2.0);
-				temp = Math.pow(temp, 0.5);
-				if (distance > temp) {
-					distance = temp;
-					predictLabel = i;
-				}
-			}
-			Map<String, Integer> tempMap = new HashMap<String, Integer>(){
-				{
-					put("0.0", 0);
-					put("1.0", 0);
-					put("2.0", 0);
-				}
-			};
-			tempMap.put(Double.toString(v.label()), 1);
-			return new Tuple2<Integer, Map<String, Integer>>(predictLabel, tempMap);
-		}).reduceByKey((a, b) -> {
-			for (String key : a.keySet()) {
-				Integer valueA = a.get(key);
-				Integer valueB = b.get(key);
-				a.put(key, valueA + valueB);
-			}
-			return a;
-		}).collectAsMap();
-	}
+//	public void predict(JavaRDD<LabeledPoint> features) {
+//		features.mapToPair(v -> {
+//			int predictLabel = 0;
+//			double distance = Double.MAX_VALUE;
+//			for (int i = 0; i < classNum; ++i) {
+//				double temp = 0.0;
+//				for (int j = 0; j < featureNum; ++j)
+//					temp += Math.pow(v.features().apply(j) - bestMemory[i][j], 2.0);
+//				temp = Math.pow(temp, 0.5);
+//				if (distance > temp) {
+//					distance = temp;
+//					predictLabel = i;
+//				}
+//			}
+//			Map<String, Integer> tempMap = new HashMap<String, Integer>(){
+//				{
+//					put("0.0", 0);
+//					put("1.0", 0);
+//					put("2.0", 0);
+//				}
+//			};
+//			tempMap.put(Double.toString(v.label()), 1);
+//			return new Tuple2<Integer, Map<String, Integer>>(predictLabel, tempMap);
+//		}).reduceByKey((a, b) -> {
+//			for (String key : a.keySet()) {
+//				Integer valueA = a.get(key);
+//				Integer valueB = b.get(key);
+//				a.put(key, valueA + valueB);
+//			}
+//			return a;
+//		}).collectAsMap();
+//	}
 }
